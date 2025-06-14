@@ -1,0 +1,12 @@
+fastapi==0.115.2
+uvicorn==0.23.2
+streamlit==1.45.1
+requests==2.31.0
+langchain==0.1.20
+langchain-community==0.0.35
+langchain-core==0.1.50
+chromadb==0.4.24
+tiktoken==0.5.1
+pydantic==1.10.13
+typing-extensions==4.10.0
+python-dotenv==1.0.1
