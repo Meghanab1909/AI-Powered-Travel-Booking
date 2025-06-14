@@ -1,7 +1,7 @@
 import os
 import tempfile
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -21,7 +21,19 @@ import ollama
 from pydantic import BaseModel
 from rag_chat import get_chat_answer
 
-# Request body schema
+# FastAPI instance
+app = FastAPI()
+
+# Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Schema for incoming chat request
 class ChatQuery(BaseModel):
     query: str
 
@@ -36,38 +48,27 @@ async def chat_with_agent(query_data: ChatQuery):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Define custom embedding function using Ollama + Mistral
+
+# Custom Embedding function using Ollama + Mistral
 class OllamaEmbeddingFunction(EmbeddingFunction):
     def __call__(self, texts: list[str]) -> list[list[float]]:
         embeddings = []
-        count = 0
-        for text in texts:
-            print("Embedding chunk", (count + 1), ":", text)
+        for idx, text in enumerate(texts):
+            print(f"Embedding chunk {idx + 1}: {text}")
             response = ollama.embeddings(model="mistral", prompt=text)
             embeddings.append(response["embedding"])
-            count += 1
         return embeddings
 
-# Initialize embedding function and Chroma DB
+# Chroma DB setup
 embedding_fn = OllamaEmbeddingFunction()
 chroma_client = chromadb.PersistentClient(path="./db")
 collection = chroma_client.get_or_create_collection(
-    name="telangana_travel",
+    name="travel_ai",
     embedding_function=embedding_fn,
     metadata={"hnsw:space": "cosine"},
 )
 
-# Initialize FastAPI app
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"]
-)
-
-# Function to process the uploaded file
+# Function to extract and split documents
 def process_document(file_path: str, file_type: str) -> list[Document]:
     if file_type == "pdf":
         loader = PyMuPDFLoader(file_path)
@@ -84,10 +85,9 @@ def process_document(file_path: str, file_type: str) -> list[Document]:
         chunk_overlap=100,
         separators=["\n\n", "\n", ".", "?", "!", " ", ""]
     )
-    
     return splitter.split_documents(docs)
 
-# Endpoint to upload and process document
+# Upload API route
 @app.post("/upload-docs")
 async def upload_docs(file: UploadFile = File(...)):
     content_type_mapping = {
@@ -95,37 +95,32 @@ async def upload_docs(file: UploadFile = File(...)):
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
     }
-    
+
     file_type = content_type_mapping.get(file.content_type)
     if not file_type:
         raise HTTPException(status_code=400, detail="Only PDF, DOCX, and XLSX files are supported.")
-    
+
     try:
         suffix = f".{file_type}"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
-            temp_file.write(await file.read())
-            temp_path = temp_file.name
-        
-        all_splits = process_document(temp_path, file_type)
-        print("Number of chunks:", len(all_splits))
-        
-        documents, metadatas, ids = [], [], []
-        for idx, split in enumerate(all_splits):
-            documents.append(split.page_content)
-            metadatas.append(split.metadata)
-            ids.append(f"{file.filename}_{idx}")
-        
-        collection.upsert(
-            documents=documents,
-            metadatas=metadatas,
-            ids=ids,
-        )
-        
-        os.remove(temp_path)
-        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(await file.read())
+            file_path = tmp.name
+
+        all_splits = process_document(file_path, file_type)
+
+        documents = [doc.page_content for doc in all_splits]
+        metadatas = [doc.metadata for doc in all_splits]
+        ids = [f"{file.filename}_{i}" for i in range(len(all_splits))]
+
+        collection.upsert(documents=documents, metadatas=metadatas, ids=ids)
+
+        os.remove(file_path)
+
         return JSONResponse({
-            "message": "Document uploaded and processed successfully",
+            "message": "File processed and embedded successfully.",
             "chunks": len(all_splits)
         })
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
