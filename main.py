@@ -187,3 +187,53 @@ Travel Agent Answer:
     except Exception as e:
         print(f"Error in chat_endpoint: {e}") 
         raise HTTPException(status_code=500, detail=str(e))
+
+
+from fastapi import UploadFile, File, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from typing import List
+
+@app.post("/upload")
+async def upload_file(file: UploadFile = File(...)):
+    if not file.filename.endswith((".pdf", ".xlsx", ".docx")):
+        raise HTTPException(status_code=400, detail="Unsupported file format. Upload PDF, DOCX or XLSX.")
+
+    suffix = os.path.splitext(file.filename)[1]
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(await file.read())
+        temp_path = tmp.name
+
+    try:
+        file_type = suffix[1:]
+        documents = process_document(temp_path, file_type)
+        for idx, doc in enumerate(documents):
+            collection.add(
+                documents=[doc.page_content],
+                ids=[f"{file.filename}_{idx}"],
+                metadatas=[doc.metadata],
+            )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
+    finally:
+        os.remove(temp_path)
+
+    return JSONResponse(content={"status": "success", "filename": file.filename})
+
+
+class ChatRequest(BaseModel):
+    query: str
+
+@app.post("/chat")
+def chat_endpoint(request: ChatRequest):
+    results = collection.query(
+        query_texts=[request.query],
+        n_results=3
+    )
+
+    context = "\n".join([doc for doc in results["documents"][0]])
+
+    prompt = f"Answer the question based on the following context:\n{context}\n\nQuestion: {request.query}"
+    response = ollama.chat(model="mistral:7b-instruct-v0.2-q4_K_M", messages=[{"role": "user", "content": prompt}])
+
+    return {"response": response["message"]["content"]}
