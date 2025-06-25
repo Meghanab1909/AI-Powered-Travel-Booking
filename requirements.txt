@@ -12,4 +12,8 @@ unstructured
 PyMuPDF
 ollama
 openpyxl
-
+python-docx
+litellm
+crawl4i
+playwright
+pydantic
