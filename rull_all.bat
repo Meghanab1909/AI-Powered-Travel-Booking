@@ -17,6 +17,10 @@ IF EXIST requirements.txt (
     pip install -r requirements.txt
 )
 
+REM Install Playwright browser dependencies
+echo 🧩 Installing Playwright browser drivers...
+python -m playwright install
+
 REM Start FastAPI backend
 echo 🌐 Starting FastAPI server...
 start "FastAPI Server" cmd /c "uvicorn main:app --reload"
