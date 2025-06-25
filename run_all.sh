@@ -17,6 +17,10 @@ if [ -f "requirements.txt" ]; then
     pip install -r requirements.txt
 fi
 
+# Install Playwright browsers (only once)
+echo "🧩 Installing Playwright browser dependencies..."
+python -m playwright install
+
 # Start FastAPI backend in background
 echo "🌐 Starting FastAPI server..."
 uvicorn main:app --reload &  # <- & runs in background
