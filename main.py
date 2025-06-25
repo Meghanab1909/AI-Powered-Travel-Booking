@@ -10,6 +10,7 @@ import requests
 import asyncio
 import json
 import traceback
+import uuid
 
 from langchain_community.document_loaders import (
     PyMuPDFLoader,
@@ -30,17 +31,19 @@ from crawl4ai.async_configs import CrawlerRunConfig
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 
 os.environ["LITELLM_LOG"] = "DEBUG"
-os.environ["LITELLM_MODEL"] = "ollama/mistral:7b-instruct-v0.2-q4_K_M"
+os.environ["LITELLM_PROVIDER"] = "ollama"
+os.environ["LITELLM_MODEL"] = "mistral"
 os.environ["OLLAMA_API_BASE"] = "http://localhost:11434"
-os.environ["LITELLM_TIMEOUT"] = "60" 
+os.environ["LITELLM_TIMEOUT"] = "45" 
+os.environ["LITELLM_API_BASE"] = os.environ["OLLAMA_API_BASE"]
 
 class OllamaEmbeddingFunction(EmbeddingFunction):
     def __call__(self, texts: list[str]) -> list[list[float]]:
         embeddings = []
         count = 0
         for text in texts:
-            print("Embedding chunk", (count + 1), ":", text)
-            response = ollama.embeddings(model="mistral:7b-instruct-v0.2-q4_K_M", prompt=text)
+            print(f"Embedding chunk {count + 1} : {text}")
+            response = ollama.embeddings(model="mistral", prompt=text)
             embeddings.append(response["embedding"])
             count += 1
         return embeddings
@@ -260,8 +263,8 @@ class ChatResponse(BaseModel):
     general_scraped_image_urls: List[str] = []
 
 global_llm_config = LLMConfig(
-    provider = "ollama/mistral:7b-instruct-v0.2-q4_K_M",
-    base_url = "http://localhost:11434",
+    provider = "ollama/mistral",
+    base_url = "http://localhost:11434"
 )
 
 async def scrape_web_data(query: str, user_constraints: List[str] = None) -> dict:
@@ -325,14 +328,24 @@ async def scrape_web_data(query: str, user_constraints: List[str] = None) -> dic
                 llm_config = global_llm_config
             )
             
+            crawl_config = {
+                "max_depth": 0,
+                "max_links_per_page": 1,
+                "timeout": 30,
+                "include_subdomains": False
+            }
+            
             run_config = CrawlerRunConfig(
                 cache_mode = "BYPASS",
                 extraction_strategy = llm_extraction_strategy_for_run,
-                css_selector = "body",
+                css_selector = "article, .main-content, .travel-info, body",
             )
                 
         try:
-            result = await crawler.arun(url = site_url, config = run_config)
+            result = await asyncio.wait_for(
+                crawler.arun(url = site_url, config = run_config, crawl_config = crawl_config),
+                timeout = 30
+            )
             
             if result.success and result.extracted_content:
                 try:
@@ -399,8 +412,35 @@ async def scrape_web_data(query: str, user_constraints: List[str] = None) -> dic
         await asyncio.sleep(5)
     
     if all_scraped_summaries or all_scraped_image_urls:
+        full_summary = "\n\n".join(set([s.strip() for s in all_scraped_summaries if s.strip()]))
+        
+        try:
+            full_summary = str(full_summary).strip()
+            
+            embedding = ollama.embeddings(model = "mistral", prompt = full_summary)["embedding"]
+            
+            if not embedding or not isinstance(embedding, list):
+                raise ValueError("Invalid embedding returned for scraped content")
+            
+            print("💾 Storing the web scraping in the vector db")
+            
+            uid = str(uuid.uuid4())
+            
+            collection.add(
+                documents = [full_summary],
+                embeddings = [embedding],
+                metadatas = [{
+                    "source":site_name, 
+                    "url":site_url
+                }],
+                ids = [uid]
+            )
+            print(f"✅ Scrapped summary saved successfully to the vector db from {site_name}")
+        except Exception as e:
+            print(f"⚠️ Failed to save scraped summary to the vector db {e}")
+            
         return {
-            "summary": "\n\n".join(all_scraped_summaries),
+            "summary": full_summary,
             "image_urls": list(set(all_scraped_image_urls))
         }
     else:
@@ -430,27 +470,30 @@ def parse_constraints(query: str) -> List[str]:
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest = Body(...)):
     query = request.query
+    print("Query Received:",query)
     combined_context = ""
     general_scraped_image_urls = []
     
     user_constraints = parse_constraints(query)
     print(f"Detected constraints: {user_constraints}")
     
+    query_embedding = ollama.embeddings(model = "mistral", prompt = query)["embedding"]
+    
     print("Querying vector DB...")
     # Query vector DB for context
     results = collection.query(
-        query_texts=[query],
+        query_embeddings=[query_embedding],
         n_results=5,
-        include = ['documents','metadatas']
+        include = ['documents','metadatas','distances']
     )
     
     db_context_docs = []
-    if results["documents"]:
+    if results and results["documents"] and any(results["documents"][0]):
         for i, doc_content in enumerate(results["documents"][0]):
             doc_metadata = results["metadatas"][0][i]
             
-            doc_activity_types = doc_metadata.get("activity_type", [])
-            if not user_constraints or any(uc in doc_activity_types for uc in user_constraints):
+            doc_activity_types = doc_metadata.get("activity_type")
+            if doc_activity_types is None or not user_constraints or any(uc in doc_activity_types for uc in user_constraints):
                 db_context_docs.append(doc_content)
     
     if db_context_docs:
@@ -459,9 +502,22 @@ async def chat_endpoint(request: ChatRequest = Body(...)):
     else:
         print("No direct context found in vector DB or no relevant documents based on constraints")
     
-    keywords_for_web_scrape = ["current prices", "latest news", "flights", "deals", "real-time", "weather", "today's events", "reviews", "best places to visit", "compare", "updated info"]
+    keywords_for_web_scrape = [
+        "current", "latest", "flights", "flight", "buses", "bus", "trains", "train",
+        "deal", "deals", "real-time", "weather", "today", "events", "event",
+        "reviews", "review", "best place", "best places", "compare", "updated",
+        "best price", "best prices", "entry fee", "ticket", "tickets", "fare",
+        "open", "closed", "hours", "timings", "crowd", "crowded", "wait time",
+        "queue", "safe", "dangerous", "accident", "weather advisory",
+        "popular now", "visited most", "hotspot"
+    ]
+
     
-    should_web_scrape = not db_context_docs or any(keyword in query.lower() for keyword in keywords_for_web_scrape)
+    should_web_scrape = (
+        not db_context_docs
+        or any(kw in query.lower() for kw in keywords_for_web_scrape)
+        or (results.get("distances") and results["distances"][0][0] > 0.6)
+    )
     
     if should_web_scrape:
         print("Initialising web scrape due to no DB context or specific keywords...")
@@ -494,7 +550,7 @@ async def chat_endpoint(request: ChatRequest = Body(...)):
         
         extracted_city_code = None
         try:
-            city_llm_response = ollama.chat(model = "mistral:7b-instruct-v0.2-q4_K_M", messages=[{"role": "user", "content": city_code_extraction_prompt}])
+            city_llm_response = ollama.chat(model = "mistral", messages=[{"role": "user", "content": city_code_extraction_prompt}])
             raw_extracted_code = city_llm_response["message"]["content"].strip().upper()
             
             cleaned_code = raw_extracted_code.replace(".","").strip()
@@ -556,8 +612,7 @@ Most appropriate and correct answer:
         print("Using combined context and explicit constraints for prompt.")
     
     try:
-        response = ollama.chat(model="mistral:7b-instruct-v0.2-q4_K_M", messages=[{"role": "user", "content": final_prompt}])
+        response = ollama.chat(model="mistral", messages=[{"role": "user", "content": final_prompt}])
         return {"response":"🧞🧞🧞 "+response["message"]["content"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error communicating with Ollama: {str(e)}")
-    
