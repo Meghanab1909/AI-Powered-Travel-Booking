@@ -14,6 +14,6 @@ ollama
 openpyxl
 python-docx
 litellm
-crawl4i
+crawl4ai
 playwright
 pydantic
