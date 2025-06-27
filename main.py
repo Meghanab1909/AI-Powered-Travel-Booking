@@ -474,6 +474,19 @@ async def chat_endpoint(request: ChatRequest = Body(...)):
     combined_context = ""
     general_scraped_image_urls = []
     
+    validation_prompt = f"""
+        You are a validation assistant.
+        Your task is to check if the following user query is related to Telangana's travel, tourism, or history.
+        If the query is related, respond with only: VALID.
+        If the query is not related, respond with only: INVALID
+        Query: {query}
+    """
+    
+    validation_response = ollama.chat(model="mistral", messages=[{"role": "user", "content": validation_prompt}])
+    
+    if "INVALID" in validation_response["message"]["content"]:
+        return {"response":"🧞🧞🧞 Sorry, I can only answer questions related to Telangana tourism, travel, or history."}
+    
     user_constraints = parse_constraints(query)
     print(f"Detected constraints: {user_constraints}")
     
