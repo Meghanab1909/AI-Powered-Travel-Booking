@@ -474,6 +474,18 @@ async def chat_endpoint(request: ChatRequest = Body(...)):
     combined_context = ""
     general_scraped_image_urls = []
     
+    with open("validators.json") as f:
+        validators = json.load(f)
+    
+    if(len(query.strip()) < validators["min_query_length"]):
+        return {"response":"🧞🧞🧞 Sorry, I am not unable to process this query. Query too short"}
+    
+    if(any(block_word in query.lower() for block_word in validators["block_keywords"])):
+        return {"response":"🧞🧞🧞 Sorry, I am not unable to process this query. Query contains blocked keywords"}
+    
+    if not any(keyword in query.lower() for keyword in validators["telangana_keywords"]):
+        return {"response":"🧞🧞🧞 Sorry, I am not unable to process this query. No Telangana keyword found"}
+        
     validation_prompt = f"""
         You are a validation assistant.
         Your task is to check if the following user query is related to Telangana's travel, tourism, or history.
