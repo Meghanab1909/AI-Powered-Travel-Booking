@@ -1,0 +1,8 @@
+{
+    "min_query_length": 5,
+    "block_keywords": ["spam", "hack", "illegal", "adult", "explicit"],
+    "telangana_keywords": [
+        "telangana", "hyderabad", "warangal", "nizamabad", "khammam", "charminar", "golconda", "ramoji",
+        "hussain sagar", "birla mandir", "salar jung", "bhadrachalam"
+    ]
+}
