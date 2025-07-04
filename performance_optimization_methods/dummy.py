@@ -1,29 +1,3 @@
-
-
-import os import litellm import tempfile from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Body from fastapi.responses import JSONResponse from fastapi.middleware.cors import CORSMiddleware from pydantic import BaseModel, Field from typing import List, Optional import requ
-
-pasted
-
-verify this code correct if any errors, remove unused parts and and basically make take effective code
-
-Edit
-
-
-I'll analyze your code and provide a cleaned up, corrected version. Here are the main issues I found:
-
-Incorrect embedding generation - The code has placeholder text instead of actual embeddings
-Missing validators.json handling - The validation logic needs proper fallback
-Unused imports and functions - Several imports and functions aren
-
-
-
-
-You are out of free messages until 11:30 PM
-
-
-Pasted content
-36.25 KB •848 lines
-Formatting may be inconsistent from source
 import os
 import litellm
 import tempfile
